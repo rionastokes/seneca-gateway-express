@@ -3,7 +3,7 @@ import GatewayExpress from '../src/gateway-express'
 
 const Seneca = require('seneca')
 
-
+const { Maintain } = require('@seneca/maintain')
 
 describe('gateway-express', () => {
 
@@ -191,3 +191,4 @@ describe('error handling when user requested Express to be bypassed', () => {
   })
 })
 
+Maintain()
