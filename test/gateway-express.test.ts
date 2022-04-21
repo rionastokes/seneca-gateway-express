@@ -1,9 +1,8 @@
 
 import GatewayExpress from '../src/gateway-express'
+import { Maintain } from '@seneca/maintain'
 
 const Seneca = require('seneca')
-
-const { Maintain } = require('@seneca/maintain')
 
 describe('gateway-express', () => {
 
@@ -53,6 +52,8 @@ describe('gateway-express', () => {
 
     expect(tmp[0].out).toMatchObject({ x: 2, y: 99 })
   })
+
+  test('maintain', Maintain)
 
 })
 
@@ -191,4 +192,4 @@ describe('error handling when user requested Express to be bypassed', () => {
   })
 })
 
-Maintain()
+
