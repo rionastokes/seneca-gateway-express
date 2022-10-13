@@ -1,62 +1,177 @@
-/* Copyright © 2021 Richard Rodger, MIT License. */
+/* Copyright © 2021-2022 Richard Rodger, MIT License. */
 
-function gateway_express(this: any, options: any) {
+
+import { Open } from 'gubu'
+
+
+import type {
+  GatewayResult
+} from '@seneca/gateway'
+
+
+type GatewayExpressOptions = {
+  auth?: {
+    token: {
+      // Cookie name
+      name: string
+    }
+    // Default cookie fields
+    cookie?: any
+  },
+  error?: {
+
+    // Use the default express error handler for errors
+    next: boolean
+  },
+}
+
+
+type GatewayExpressDirective = {
+  // Call Express response.next (passes error if defined)
+  next?: boolean
+
+  // Set/remove login cookie
+  auth?: {
+
+    // Cookie token value
+    token: string
+
+    // Override option cookie fields
+    cookie?: any
+
+    // Remove auth cookie
+    remove?: boolean
+  }
+
+  // HTTP redirect
+  redirect?: {
+    location: string
+  }
+
+  // HTTP status code
+  status?: number
+
+  header?: Record<string, any>
+}
+
+
+function gateway_express(this: any, options: GatewayExpressOptions) {
   const seneca: any = this
-  const gateway = seneca.export('gateway/handler')
-  const parseJSON = seneca.export('gateway/parseJSON')
+
+  const tag = seneca.plugin.tag
+  const gtag = (null == tag || '-' === tag) ? '' : '$' + tag
+  const gateway = seneca.export('gateway' + gtag + '/handler')
+  const parseJSON = seneca.export('gateway' + gtag + '/parseJSON')
 
 
   seneca.act('sys:gateway,add:hook,hook:delegate', {
-    action: (delegate: any, _json: any, ctx: any) => {
-      ctx.req.seneca$ = delegate
+    gateway: 'express',
+    tag: seneca.plugin.tag,
+    action: (_json: any, ctx: any) => {
+      ctx.req.seneca$ = this
     }
   })
 
 
   async function handler(req: any, res: any, next: any) {
     const body = req.body
+
     const json = 'string' === typeof body ? parseJSON(body) : body
+
+    // TODO: doc as a standard feature
+    // TODO: implement in other gateways
+    json.gateway = {
+      params: req.params,
+      query: req.query,
+    }
 
     if (json.error$) {
       return res.status(400).send(json)
     }
 
-    try {
-      const out: any = await gateway(json, { req, res })
+    const result: GatewayResult = await gateway(json, { req, res })
 
-      if (out?.done$) {
-        return next()
+    let gateway$: GatewayExpressDirective | undefined = result.gateway$
+
+    if (gateway$) {
+      if (gateway$.auth && options.auth) {
+        if (gateway$.auth.token) {
+          res.cookie(
+            options.auth.token.name,
+            gateway$.auth.token,
+            {
+              ...options.auth.cookie,
+              ...(gateway$.auth.cookie || {})
+            }
+          )
+        }
+        else if (gateway$.auth.remove) {
+          res.clearCookie(options.auth.token.name)
+        }
       }
 
-      if (out?.error$ && !options.bypass_express_error_handler) {
-        // NOTE: Here we are passing the object with information about
-        // the error to the Express' error handler, which allows users
-        // to handle errors in their application.
-        //
-        // This is useful, for example, when you want to return an HTTP
-        // 404 for the 'act_not_found' error; - or handle any other error
-        // that you defined and threw inside a Seneca instance.
-        //
-        return next(out)
+      if (gateway$.header) {
+        res.set(gateway$.header)
       }
 
-      return res.send(out)
-    } catch (err) {
-      // NOTE: Since the `gateway` function should not normally throw, and
-      // all errors coming from the underlying Seneca instance should have
-      // been handled by it already, - we assume that if something does throw,
-      // then it's nothing that can be adequately handled. Hence, we do not
-      // pass this error to the Express handler, and we let it crash instead.
-      //
-      throw err
+      if (gateway$.next) {
+        // Uses the default express error handler
+        return next(result.error ? result.out.error$ : undefined)
+      }
+
+      // Should be last as final action
+      else if (gateway$.redirect?.location) {
+        return res.redirect(gateway$.redirect?.location)
+      }
+
+      if (result.error) {
+        if (options.error?.next) {
+          return next(result.error ? result.out.error$ : undefined)
+        }
+        else {
+          res.status(gateway$.status || 500)
+          return res.send(result.out)
+        }
+      }
+      else {
+        if (gateway$.status) {
+          res.status(gateway$.status)
+        }
+        return res.send(result.out)
+      }
     }
+    else {
+      return res.send(result.out)
+    }
+  }
+
+  // Named webhook handler
+  async function hook(req: any, res: any, next: any) {
+    const body = req.body || {}
+
+    const name = req.params.name
+    const code = req.params.code
+
+    // Standard message for hooks based on URL path format:
+    // /prefix/:name/:code
+    const hookmsg = {
+      handle: 'hook',
+      name,
+      code,
+      body: 'string' === typeof body ? parseJSON(body) : body
+    }
+
+    req.body = hookmsg
+
+    return handler(req, res, next)
   }
 
 
   return {
     name: 'gateway-express',
     exports: {
-      handler
+      handler,
+      hook,
     }
   }
 }
@@ -64,6 +179,19 @@ function gateway_express(this: any, options: any) {
 
 // Default options.
 gateway_express.defaults = {
+  auth: {
+    token: {
+      name: 'seneca-auth'
+    },
+    cookie: Open({
+      maxAge: 365 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      sameSite: true,
+    })
+  },
+  error: {
+    next: true
+  }
 }
 
 
